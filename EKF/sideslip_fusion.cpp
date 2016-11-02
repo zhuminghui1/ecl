@@ -200,6 +200,7 @@ void Ekf::fuseSideslip()
 	// apply covariance correction via P_new = (I -K*H)*P
 	// first calculate expression for KHP
 	// then calculate P - KHP
+	float KH[_k_num_states][_k_num_states];
 	for (unsigned row = 0; row < _k_num_states; row++) {
 		KH[row][0] = Kfusion[row] * H_BETA[0];
 		KH[row][1] = Kfusion[row] * H_BETA[1];
