@@ -793,3 +793,17 @@ void Ekf::resetWindCovariance()
 	}
 
 }
+
+// zero the attitude covariances, but preserve the variances
+void Ekf::zeroAttCovOnly()
+{
+    float varTemp[3];
+    for (uint8_t index=0; index<=2; index++) {
+        varTemp[index] = P[index][index];
+    }
+    zeroCols(P,0,2);
+    zeroRows(P,0,2);
+    for (uint8_t index=0; index<=2; index++) {
+        P[index][index] = varTemp[index];
+    }
+}

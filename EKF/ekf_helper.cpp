@@ -325,6 +325,74 @@ void Ekf::alignOutputFilter()
 	}
 }
 
+// Do a forced re-alignment of the yaw angle to align with the horizontal velocity vector from the GPS.
+// It is used to align the yaw angle after launch or takeoff for fixed wing vehicle.
+bool Ekf::realignYawMagGPS()
+{
+    // Need at least 5 m/s of GPS speed for a reliable alignment
+    if ((sq(_gps_sample_delayed.vel(0)) + sq(_gps_sample_delayed.vel(1))) > 25.0f) {
+        // save a copy of the quaternion state for later use in calculating the amount of reset change
+        Quaternion quat_before_reset = _state.quat_nominal;
+
+        // get quaternion from existing filter states and calculate roll, pitch and yaw angles
+        matrix::Euler<float> euler321(_state.quat_nominal);
+
+        // calculate course yaw angle
+        float velYaw = atan2f(_state.vel(1),_state.vel(0));
+
+        // calculate course yaw angle from GPS velocity
+        float gpsYaw = atan2f(_gps_sample_delayed.vel(1),_gps_sample_delayed.vel(0));
+
+        // Check the yaw angles for consistency
+        float yawErr = math::max(fabsf(matrix::wrap_pi(gpsYaw - velYaw)),fabsf(matrix::wrap_pi(gpsYaw - euler321(2))));
+
+        // If the angles disagree by more than 45 degrees and horizontal GPS velocity innovations are large or no previous yaw alignment, we declare the magnetic yaw as bad
+        bool badVelInnov = ((_vel_pos_test_ratio[0] > 1.0f) || (_vel_pos_test_ratio[1] > 1.0f)) && _control_status.flags.gps;
+        bool badYawErr = yawErr > 0.7854f;
+        bool badMagYaw = (badYawErr && badVelInnov) || !_control_status.flags.yaw_align;
+
+        // correct yaw angle using GPS ground course if compass yaw bad
+        if (badMagYaw) {
+
+            // calculate new filter quaternion states using previous Roll/Pitch and GPS yaw angles
+            matrix::Euler<float> euler_init(euler321(0), euler321(1), gpsYaw);
+            _state.quat_nominal = Quaternion(euler_init);
+
+            // reset the velocity and posiiton states as they will be inaccurate due to bad yaw
+            resetVelocity();
+            resetPosition();
+
+            // zero the attitude covariances becasue the correlations will now be invalid
+            zeroAttCovOnly();
+
+        }
+
+        // calculate the amount that the quaternion has changed by
+        _state_reset_status.quat_change = _state.quat_nominal * quat_before_reset.inversed();
+
+        // add the reset amount to the output observer buffered data
+        outputSample output_states;
+        unsigned output_length = _output_buffer.get_length();
+        for (unsigned i=0; i < output_length; i++) {
+            output_states = _output_buffer.get_from_index(i);
+            output_states.quat_nominal *= _state_reset_status.quat_change;
+            _output_buffer.push_to_index(i,output_states);
+        }
+
+        // apply the change in attitude quaternion to our newest quaternion estimate
+        // which was already taken out from the output buffer
+        _output_new.quat_nominal *= _state_reset_status.quat_change;
+
+        // capture the reset event
+        _state_reset_status.quat_counter++;
+
+        return true;
+
+    } else {
+        return false;
+    }
+}
+
 // Reset heading and magnetic field states
 bool Ekf::resetMagHeading(Vector3f &mag_init)
 {
@@ -367,8 +435,26 @@ bool Ekf::resetMagHeading(Vector3f &mag_init)
 		}
 
 		// calculate initial quaternion states for the ekf
-		// we don't change the output attitude to avoid jumps
 		_state.quat_nominal = Quaternion(euler321);
+
+		// calculate the amount that the quaternion has changed by
+		_state_reset_status.quat_change = _state.quat_nominal * quat_before_reset.inversed();
+
+		// add the reset amount to the output observer buffered data
+		outputSample output_states;
+		unsigned output_length = _output_buffer.get_length();
+		for (unsigned i=0; i < output_length; i++) {
+			output_states = _output_buffer.get_from_index(i);
+			output_states.quat_nominal *= _state_reset_status.quat_change;
+			_output_buffer.push_to_index(i,output_states);
+		}
+
+		// apply the change in attitude quaternion to our newest quaternion estimate
+		// which was already taken out from the output buffer
+		_output_new.quat_nominal *= _state_reset_status.quat_change;
+
+		// capture the reset event
+		_state_reset_status.quat_counter++;
 
 	} else {
 		// use a 312 sequence
