@@ -79,9 +79,10 @@ struct ext_vision_message {
 
 struct outputSample {
 	Quaternion  quat_nominal;	// nominal quaternion describing vehicle attitude
-	Vector3f    vel;	// NED velocity estimate in earth frame in m/s
-	Vector3f    pos;	// NED position estimate in earth frame in m/s
-	uint64_t 	time_us;	// timestamp in microseconds
+	Vector3f    vel;		// NED velocity estimate in earth frame in m/s
+	Vector3f    pos;		// NED position estimate in earth frame in m/s
+	uint64_t    time_us;		// timestamp in microseconds
+	float	    dt;			// delta time in seconds
 };
 
 struct imuSample {
@@ -278,6 +279,7 @@ struct parameters {
 	// output complementary filter tuning
 	float vel_Tau{0.25f};			// velocity state correction time constant (1/sec)
 	float pos_Tau{0.25f};			// postion state correction time constant (1/sec)
+	int link_vel_pos{0};			// Enables option to output velocity estimate that is rate of change of position estimate (0=off, 1=on)
 
 	// accel bias learning control
 	float acc_bias_lim{0.4f};		// maximum accel bias magnitude (m/s/s)

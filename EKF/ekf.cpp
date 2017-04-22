@@ -514,6 +514,9 @@ void Ekf::calculateOutputStates()
 	// use trapezoidal integration to calculate the INS position states
 	_output_new.pos += (_output_new.vel + vel_last) * (imu_new.delta_vel_dt * 0.5f);
 
+	// accumulate the time for each update
+	_output_new.dt += imu_new.delta_vel_dt;
+
 	// store INS states in a ring buffer that with the same length and time coordinates as the IMU data buffer
 	if (_imu_updated) {
 		_output_buffer.push(_output_new);
@@ -562,37 +565,97 @@ void Ekf::calculateOutputStates()
 		_output_tracking_error[1] = vel_err.norm();
 		_output_tracking_error[2] = pos_err.norm();
 
-		// calculate a velocity correction that will be applied to the output state history
-		float vel_gain = _dt_ekf_avg / math::constrain(_params.vel_Tau, _dt_ekf_avg, 10.0f);
-		_vel_err_integ += vel_err;
-		Vector3f vel_correction = vel_err * vel_gain + _vel_err_integ * sq(vel_gain) * 0.1f;
+		/*
+		 * Loop through the output filter state history and apply the corrections to the velocity and position states.
+		 * This method is too expensive to use for the attitude states due to the quaternion operations required
+		 * but becasue it eliminates the time delay in the 'correction loop' it  allows higher tracking gains
+		 * to be used and reduces tracking error relative to EKF states.
+		 */
 
-		// calculate a position correction that will be applied to the output state history
-		float pos_gain = _dt_ekf_avg / math::constrain(_params.pos_Tau, _dt_ekf_avg, 10.0f);
-		_pos_err_integ += pos_err;
-		Vector3f pos_correction = pos_err * pos_gain + _pos_err_integ * sq(pos_gain) * 0.1f;
+		if (_params.link_vel_pos == 1) {
+			/*
+			 * Track the EKF position state at the fusion time horizon by applying a correction to the
+			 * velocity state history and propagating the position forward in time using the corrected
+			 * velocity history. This provides a velocity that is closer to the second derivative of the position
+			 * but does degrade tracking relative to EKF states.
+			 */
 
-		// loop through the output filter state history and apply the corrections to the velocity and position states
-		// this method is too expensive to use for the attitude states due to the quaternion operations required
-		// but does not introduce a time delay in the 'correction loop' and allows smaller tracking time constants
-		// to be used
-		outputSample output_states = {};
-		unsigned max_index = _output_buffer.get_length() - 1;
+			// calculate a velocity correction that will be applied to the output state history
+			// using a PD feedback tuned to a 5% overshoot
+			float pos_gain = _dt_ekf_avg / math::constrain(_params.pos_Tau, _dt_ekf_avg, 10.0f);
+			Vector3f vel_correction = pos_err * pos_gain + vel_err * pos_gain * 1.1f;
 
-		for (unsigned index = 0; index <= max_index; index++) {
-			output_states = _output_buffer.get_from_index(index);
+			// loop through the output filter state history starting at the oldest and apply the corrections to the
+			// velocity states and propagate the position forward using the corrected velocity
+			outputSample current_state;
+			outputSample next_state;
+			unsigned index = _output_buffer.get_oldest_index();
+			unsigned index_next;
+			unsigned size = _output_buffer.get_length();
+			for (unsigned counter=0; counter < (size - 1); counter++) {
+				index_next = (index + 1) % size;
+				current_state = _output_buffer.get_from_index(index);
+				next_state = _output_buffer.get_from_index(index_next);
 
-			// a constant  velocity correction is applied
-			output_states.vel += vel_correction;
+				// correct the velocity
+				if (counter == 0) {
+					current_state.vel += vel_correction;
+					_output_buffer.push_to_index(index,current_state);
+				}
+				next_state.vel += vel_correction;
 
-			// a constant position correction is applied
-			output_states.pos += pos_correction;
+				// position is propagated forward using the corrected velocity and a trapezoidal integrator
+				next_state.pos = current_state.pos + (current_state.vel + next_state.vel) * 0.5f * next_state.dt;
 
-			// push the updated data to the buffer
-			_output_buffer.push_to_index(index, output_states);
+				// push the updated data to the buffer
+				_output_buffer.push_to_index(index_next,next_state);
+
+				// advance the index
+				index = (index + 1) % size;
+			}
+
+		} else {
+			/*
+			 * Correct the velocity and position output observer state history individually so they
+			 * track the EKF states at the fusion time horizon. This option provides the most accurate
+			 * tracking of EKF states, but the velocity state is not equivalent tot he first derivative
+			 * of the position state.
+			 */
+
+			// calculate a velocity correction that will be applied to the output state history
+			float vel_gain = _dt_ekf_avg / math::constrain(_params.vel_Tau, _dt_ekf_avg, 10.0f);
+			_vel_err_integ += vel_err;
+			Vector3f vel_correction = vel_err * vel_gain + _vel_err_integ * sq(vel_gain) * 0.1f;
+
+			// calculate a position correction that will be applied to the output state history
+			float pos_gain = _dt_ekf_avg / math::constrain(_params.pos_Tau, _dt_ekf_avg, 10.0f);
+			_pos_err_integ += pos_err;
+			Vector3f pos_correction = pos_err * pos_gain + _pos_err_integ * sq(pos_gain) * 0.1f;
+
+			// loop through the output filter state history and apply the corrections to the velocity and position states
+			// this method is too expensive to use for the attitude states due to the quaternion operations required
+			// but does not introduce a time delay in the 'correction loop' and allows smaller tracking time constants
+			// to be used
+			outputSample output_states;
+			unsigned max_index = _output_buffer.get_length() - 1;
+			for (unsigned index=0; index <= max_index; index++) {
+				output_states = _output_buffer.get_from_index(index);
+
+				// a constant  velocity correction is applied
+				output_states.vel += vel_correction;
+
+				// a constant position correction is applied
+				output_states.pos += pos_correction;
+
+				// push the updated data to the buffer
+				_output_buffer.push_to_index(index,output_states);
+
+			}
 		}
 
 		// update output state to corrected values
 		_output_new = _output_buffer.get_newest();
+		_output_new.dt = 0.0f;
+
 	}
 }
