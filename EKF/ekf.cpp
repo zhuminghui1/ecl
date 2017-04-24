@@ -469,10 +469,10 @@ bool Ekf::collect_imu(imuSample &imu)
 */
 void Ekf::calculateOutputStates()
 {
-	// use latest IMU data
+	// Use full rate IMU data at the current time horizon
 	imuSample imu_new = _imu_sample_new;
 
-	// correct delta angles for bias offsets and scale factors
+	// correct delta angles for bias offsets
 	Vector3f delta_angle;
 	float dt_scale_correction = _dt_imu_avg / _dt_ekf_avg;
 	delta_angle(0) = _imu_sample_new.delta_ang(0) - _state.gyro_bias(0) * dt_scale_correction;
@@ -517,7 +517,7 @@ void Ekf::calculateOutputStates()
 	// accumulate the time for each update
 	_output_new.dt += imu_new.delta_vel_dt;
 
-	// store INS states in a ring buffer that with the same length and time coordinates as the IMU data buffer
+	// store the INS states in a ring buffer with the same length and time coordinates as the IMU data buffer
 	if (_imu_updated) {
 		_output_buffer.push(_output_new);
 		_imu_updated = false;
@@ -633,9 +633,6 @@ void Ekf::calculateOutputStates()
 			Vector3f pos_correction = pos_err * pos_gain + _pos_err_integ * sq(pos_gain) * 0.1f;
 
 			// loop through the output filter state history and apply the corrections to the velocity and position states
-			// this method is too expensive to use for the attitude states due to the quaternion operations required
-			// but does not introduce a time delay in the 'correction loop' and allows smaller tracking time constants
-			// to be used
 			outputSample output_states;
 			unsigned max_index = _output_buffer.get_length() - 1;
 			for (unsigned index=0; index <= max_index; index++) {
@@ -655,6 +652,8 @@ void Ekf::calculateOutputStates()
 
 		// update output state to corrected values
 		_output_new = _output_buffer.get_newest();
+
+		// reset time delta to zero for the next accumulation of full rate IMU data
 		_output_new.dt = 0.0f;
 
 	}
