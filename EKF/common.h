@@ -82,7 +82,13 @@ struct outputSample {
 	Vector3f    vel;		// NED velocity estimate in earth frame in m/s
 	Vector3f    pos;		// NED position estimate in earth frame in m/s
 	uint64_t    time_us;		// timestamp in microseconds
+};
+
+struct outputVert {
+	float	    vel_d;		// D velocity calculated using alternative algorithm
+	float	    vel_d_integ;	// Integral of vel_d
 	float	    dt;			// delta time in seconds
+	uint64_t    time_us;		// timestamp in microseconds
 };
 
 struct imuSample {
@@ -279,7 +285,6 @@ struct parameters {
 	// output complementary filter tuning
 	float vel_Tau{0.25f};			// velocity state correction time constant (1/sec)
 	float pos_Tau{0.25f};			// postion state correction time constant (1/sec)
-	int link_vel_pos{0};			// Enables option to output velocity estimate that is rate of change of position estimate (0=off, 1=on)
 
 	// accel bias learning control
 	float acc_bias_lim{0.4f};		// maximum accel bias magnitude (m/s/s)
